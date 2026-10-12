@@ -5,7 +5,7 @@ Authoritative issue bodies are the execution inventory read for this assignment.
 | Criterion | Implemented local evidence | Remaining full acceptance |
 | --- | --- | --- |
 | PP-03.1 | Strict immutable geometry/slot/font/profile/export policy, mm bounds and invalid-unit/geometry tests | Accepted canonical template adapter and real selected product constraints |
-| PP-03.2 | Ticket/postcard/card/art-print have explicit pending registry states | Named signed-off roster, confirmed supplier SKU/spec/revision/source; each P1 enable/defer decision |
+| PP-03.2 | Ticket/postcard/card/art-print have explicit pending registry states. Separate sandbox-validation template (Prodigi `GLOBAL-PHO-4X6`, 6x4 in @300 dpi, 1800x1200 sRGB JPG, US Standard; decision 0003 R1-R3), not on the roster | Customer print-tier mapping (finish, Classic/Stamp, trim) is an open product decision; named signed-off roster, confirmed supplier SKU/spec/revision/source (product-details read); each P1 enable/defer decision |
 | PP-03.3 | Supported/unsupported/unknown comparison with product, dimension/aspect, bleed/safe, DPI, font, profile/export/transparency reasons | Real fulfillment capability producer and immutable accepted fixture pins |
 | PP-03.4 | Immutable registry revisions, fingerprints and collision/history tests | Accepted template change and approval applicability semantics |
 | PP-03.5 | Synthetic passing/failing/incompatible fixtures | Per-enabled-real-format dimensions/spec/goldens; no launch format enabled locally |
