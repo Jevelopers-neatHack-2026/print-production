@@ -16,8 +16,9 @@ batch publication remain blocked. See [candidate adapters](../contracts/candidat
 
 Use the official Node **24.21.0** bundle with bundled npm **11.19.0**, verified
 against [Node's checksums](https://nodejs.org/dist/v24.21.0/SHASUMS256.txt).
-Put its `bin` directory first on PATH. Exact archive, dependency, font, browser
-and platform identities are in [pins.json](pins.json) and package-lock.json.
+Put its `bin` directory first on PATH. Run the commands from the repository root.
+Exact archive, dependency, font, browser and platform identities are in
+[pins.json](pins.json) and [package-lock.json](../../package-lock.json).
 
 ```sh
 export TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8
@@ -45,9 +46,11 @@ the local calibration. Several `external-blocked` leaves run private local
 suites, record their evidence, then exit 1 with the missing external dependency;
 `api-contracts` remains unimplemented. `release` records each required leaf and
 exits 1 with `RELEASE_INCOMPLETE` while any leaf or immutable external pin is
-missing. Canonical shared-contracts, accepted supplier, app and finance consumer
-pins are null. Passing private mechanics does not meet supplier or consumer
-acceptance.
+missing. The release receipt's accepted shared-contracts, supplier, app and
+finance consumer pins are null; the separate development adapter still uses its
+vendored 0.9.7 package. `artifact-storage` and `exporters` can return scoped local
+conformance while retaining `accepted:false` and external acceptance holds.
+Passing private mechanics does not meet supplier or consumer acceptance.
 
 ## Calibration profile
 

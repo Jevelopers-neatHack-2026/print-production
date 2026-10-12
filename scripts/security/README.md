@@ -1,5 +1,24 @@
 # Linux renderer security policy
 
+## Current policy and evidence
+
+The current runner uses the audited derived
+[`playwright-1.64.0.chromium-chroot.seccomp`](playwright-1.64.0.chromium-chroot.seccomp)
+profile. The original upstream profile remains unchanged for provenance and the
+negative comparison. [Policy validation](seccomp-policy.mjs) permits only the
+documented additional `chroot` rule and requires both pinned hashes.
+
+ROOT-R1 was resolved in reviewed/merged
+[PR #20](https://github.com/Jevelopers-neatHack-2026/print-production/pull/20).
+The pinned Linux CI profile is authoritative under
+[PR #34](https://github.com/Jevelopers-neatHack-2026/print-production/pull/34).
+See the [runtime evidence summary](../../docs/runtime/README.md#evidence-and-remaining-acceptance).
+Evidence remains revision-specific; every later candidate needs its own applicable
+checks. The diagnosis sections below retain the original failures and review
+requirements as a chronological record, not the latest merge status.
+
+## Upstream policy and original probes
+
 `playwright-1.64.0.seccomp` is an unchanged copy of Playwright's official
 Docker seccomp profile from commit `606ecd8b34bac100db32561b6278ffd76e5eb3cd`:
 

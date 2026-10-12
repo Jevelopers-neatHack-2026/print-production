@@ -11,6 +11,11 @@ issue closure authority; recovery and observation leaf gates remain blocked.
 
 Use Node 24.21.0/npm 11.19.0, UTC and C.UTF-8:
 
+Run from the repository root after the [runtime setup](../runtime/README.md#run),
+including the pinned browser installation. `npm ci --offline` below requires
+dependencies already present in the local npm cache; use the ordinary locked
+`npm ci` from that setup guide for a first install with registry access.
+
 ```sh
 npm ci --offline
 npm run build
