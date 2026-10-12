@@ -1,5 +1,11 @@
 import { z } from "zod";
 import {
+	createCipheriv,
+	createDecipheriv,
+	createHmac,
+	randomBytes,
+} from "node:crypto";
+import {
 	check,
 	codes,
 	parse,
@@ -123,7 +129,91 @@ export type DeliveryClaim = {
 	readonly number: number;
 };
 export class ObservationOutbox {
-	constructor(private readonly db: DurabilityDatabase) {}
+	private readonly cursorKey: Buffer;
+	constructor(private readonly db: DurabilityDatabase) {
+		this.cursorKey = this.db.transaction(() => {
+			const stored = this.db.sql
+				.prepare("SELECT key FROM evidence_cursor_keys WHERE id=1")
+				.get();
+			if (stored) {
+				const key = stored["key"];
+				check(key instanceof Uint8Array && key.byteLength === 32, "INTEGRITY");
+				return Buffer.from(key);
+			}
+			const key = randomBytes(32);
+			this.db.sql
+				.prepare("INSERT INTO evidence_cursor_keys(id,key) VALUES(1,?)")
+				.run(key);
+			return key;
+		});
+	}
+	/**
+	 * Build a deterministic, encrypted cursor scoped to this private store and
+	 * caller scope. The sequence and unkeyed scope digest stay out of the token.
+	 * This is a trusted in-process minting API, not a caller authorization gate.
+	 */
+	createEvidenceCursor(scope: Scope, sequence: number): string {
+		check(Number.isSafeInteger(sequence) && sequence >= 0, "INVALID_INPUT");
+		const plain = Buffer.alloc(40);
+		Buffer.from(scopeKey(scope), "hex").copy(plain, 0);
+		plain.writeBigUInt64BE(BigInt(sequence), 32);
+		const encryptionKey = createHmac("sha256", this.cursorKey)
+			.update("pp-evidence-cursor-encryption-v2", "ascii")
+			.digest();
+		const nonceKey = createHmac("sha256", this.cursorKey)
+			.update("pp-evidence-cursor-nonce-v2", "ascii")
+			.digest();
+		// Separate PRF keys keep encryption and deterministic nonce derivation
+		// independent. A repeated plaintext repeats the entire token; distinct
+		// plaintexts have the birthday collision bound of a 128-bit nonce.
+		const nonce = createHmac("sha256", nonceKey)
+			.update(plain)
+			.digest()
+			.subarray(0, 16);
+		const cipher = createCipheriv("aes-256-gcm", encryptionKey, nonce);
+		cipher.setAAD(Buffer.from("pp.telemetry.evidence-cursor.v2", "ascii"));
+		const encrypted = Buffer.concat([cipher.update(plain), cipher.final()]);
+		return `v2:${Buffer.concat([nonce, encrypted, cipher.getAuthTag()]).toString("base64url")}`;
+	}
+	/**
+	 * Decode only cursors issued by this private store for this caller scope.
+	 * Invalid, legacy, cross-store and cross-scope tokens share one failure.
+	 */
+	evidenceCursorOffset(scope: Scope, cursor: string | null): number {
+		if (cursor === null) return 0;
+		try {
+			check(
+				typeof cursor === "string" && /^v2:[A-Za-z0-9_-]{96}$/.test(cursor),
+				"INVALID_INPUT",
+			);
+			const encoded = cursor.slice(3);
+			const bytes = Buffer.from(encoded, "base64url");
+			check(bytes.toString("base64url") === encoded, "INVALID_INPUT");
+			check(bytes.length === 72, "INVALID_INPUT");
+			const encryptionKey = createHmac("sha256", this.cursorKey)
+				.update("pp-evidence-cursor-encryption-v2", "ascii")
+				.digest();
+			const nonce = bytes.subarray(0, 16);
+			const tag = bytes.subarray(bytes.length - 16);
+			const decipher = createDecipheriv("aes-256-gcm", encryptionKey, nonce);
+			decipher.setAAD(Buffer.from("pp.telemetry.evidence-cursor.v2", "ascii"));
+			decipher.setAuthTag(tag);
+			const plain = Buffer.concat([
+				decipher.update(bytes.subarray(16, bytes.length - 16)),
+				decipher.final(),
+			]);
+			check(
+				plain.length === 40 &&
+					plain.subarray(0, 32).toString("hex") === scopeKey(scope),
+				"INVALID_INPUT",
+			);
+			const sequence = Number(plain.readBigUInt64BE(32));
+			check(Number.isSafeInteger(sequence), "INVALID_INPUT");
+			return sequence;
+		} catch {
+			throw new DurabilityError("INVALID_INPUT");
+		}
+	}
 	private event(row: unknown): Observation {
 		const event = parse(observationSchema, row);
 		const joins = parse(

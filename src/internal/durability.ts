@@ -110,6 +110,10 @@ export const defaultLimits: Limits = Object.freeze({
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL, limits TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS evidence_cursor_keys (id INTEGER PRIMARY KEY CHECK(id=1), key BLOB NOT NULL CHECK(typeof(key)='blob' AND length(key)=32));
+CREATE TRIGGER IF NOT EXISTS immutable_evidence_cursor_key_insert BEFORE INSERT ON evidence_cursor_keys WHEN EXISTS(SELECT 1 FROM evidence_cursor_keys) BEGIN SELECT RAISE(ABORT,'immutable'); END;
+CREATE TRIGGER IF NOT EXISTS immutable_evidence_cursor_key_update BEFORE UPDATE ON evidence_cursor_keys BEGIN SELECT RAISE(ABORT,'immutable'); END;
+CREATE TRIGGER IF NOT EXISTS immutable_evidence_cursor_key_delete BEFORE DELETE ON evidence_cursor_keys BEGIN SELECT RAISE(ABORT,'immutable'); END;
 CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, scope TEXT NOT NULL, key TEXT NOT NULL, request TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', denied INTEGER NOT NULL DEFAULT 0, UNIQUE(scope,key));
 CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, operation TEXT NOT NULL REFERENCES operations(id), state TEXT NOT NULL DEFAULT 'open');
 CREATE TABLE IF NOT EXISTS blobs (digest TEXT PRIMARY KEY, length INTEGER NOT NULL, bytes BLOB NOT NULL);
