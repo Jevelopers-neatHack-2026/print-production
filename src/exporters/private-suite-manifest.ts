@@ -55,9 +55,9 @@ export const outputTestFiles = {
 	],
 } as const;
 export const compositionExpectedTests = {
-	templates: 67,
-	composition: 79,
-	typography: 69,
+	templates: 79,
+	composition: 91,
+	typography: 81,
 	"approved-assets": 77,
 	preflight: 82,
 	"bounded-repair": 55,
