@@ -124,7 +124,7 @@ This exact reproduction was executed with Python 3.13.5 against artifact `117332
 
 ## Remaining owner inputs and acceptance
 
-The fixture is synthetic 1200 x 600, 4 x 2 inch output. It is not GLOBAL-PHO-4X6, a trimmed Classic/Stamp, or evidence for matte, foil, holo, supplier bleed, or safe zones. The commitment retains `accepted: false`, `handoffEligible: false`, null Finance receipt, and empty usage references. The historical CORPUS.json word `accepted` for the valid variant is an integrity expectation only, not customer approval.
+The fixture is synthetic 1200 x 600, 4 x 2 inch output. It is not GLOBAL-PHO-4X6, a trimmed Classic/Stamp, or evidence for matte, foil, holo, supplier bleed, or safe zones. The corpus retains `accepted: false`, `handoffEligible: false`, null Finance receipt, and empty usage references. The trusted commitment separately records `eligibility.state: blocked` and `eligibility.handoff_eligible: false`. The historical CORPUS.json word `accepted` for the valid variant is an integrity expectation only, not customer approval.
 
 | Required next input | Accountable role and existing route |
 | --- | --- |
