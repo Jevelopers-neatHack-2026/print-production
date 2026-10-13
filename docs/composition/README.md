@@ -6,7 +6,7 @@ Every corpus object, geometry, product reference, permission response and repair
 
 ## Local flow
 
-1. The future canonical adapter resolves validated immutable creative/fact references, approved font bytes and layout policy, scoped asset bytes and current permission ports. The engine never fetches a caller URL or path.
+1. The [development candidate adapter](../contracts/candidate-adapter.md) resolves validated immutable creative/fact references, approved font bytes and layout policy, scoped asset bytes and current permission ports. Its tests use synthetic authority; accepted production integration remains pending. The engine never fetches a caller URL or path.
 2. `resolveLayout`, `resolveConstraints` and `parseComposition` parse inert JSON into frozen private nodes. Descriptors are inspected before Zod so getters, functions, exotic prototypes, cycles, symbols, unsupported fields and large sparse arrays cannot enter the model. Nested objects are strict. References accept only bounded opaque identifiers.
 3. `composeArtifact` sorts nodes by unique integer order and font inventory by identifier; retains immutable source bytes as base64; parses assets; measures/shapes exact strings; builds escaped SVG; hashes the source artwork, model and render separately; and checks external composition applicability. There is no generation port in the engine. A fixture adds a throwing generation spy and asserts zero calls.
 4. `inspectModel` deterministically evaluates geometry, transformed raster DPI, bleed coverage, safe zones, required slots, clipping, source/render/content/font integrity, explicit profile assumptions, transparency, warnings and final-file hook completeness. `inspectArtifact` additionally rechecks current external asset and composition permission.
@@ -50,6 +50,7 @@ Use the existing pinned toolchain with `TZ=UTC LANG=C.UTF-8 LC_ALL=C.UTF-8`:
 
 ```sh
 npm ci
+npm run browser:install
 npm run build
 npm run typecheck
 npm run format:check
@@ -58,7 +59,7 @@ PP_COMPOSITION_EVIDENCE_DIR=out/composition-render node --test dist/tests/integr
 npm run verify -- --suite composition --mode offline --evidence-dir out/composition-gates
 ```
 
-When invoked standalone, the six named suites (`templates`, `composition`, `typography`, `approved-assets`, `preflight`, `bounded-repair`) execute their selected private units and the real offline render corpus, record local exit 0 on success, then intentionally return exit 1 with `external-blocked`. Release retains exit 1. Nested invocation is still affected by DUR-R4 until the separately owned dispatcher helper is integrated. The new adversarial regressions run directly through `npm test`; adding them to named-suite selections is part of that later handoff. No missing canonical pin or supplier fixture is fabricated.
+When invoked standalone, the six named suites (`templates`, `composition`, `typography`, `approved-assets`, `preflight`, `bounded-repair`) execute their selected private units and the real offline render corpus, record the child result, then intentionally return exit 1 with `external-blocked`. Release retains exit 1. The integrated independent runner requires exact test counts, a real canary and fresh artifacts; the earlier DUR-R4 nested-dispatch defect is recorded as fixed in the [dispatcher handoff](../durability/dispatcher-handoff.md). See [private-suite.ts](../../src/exporters/private-suite.ts) and the [suite selections](../../src/exporters/private-suite-manifest.ts) for the current checks. No missing canonical pin or supplier fixture is fabricated.
 
 Draft previews are SVG/PNG/PDF and normalized PDF using the unchanged sandbox-preserving private browser helper. Browser bytes/version, environment, actual custom painted fonts, independent shaping metrics, visible ink, parsed dimensions, PDF embedded programs and source/display identities are recorded. PNG previews are 96 DPI and fail the fixture's required output DPI. Profile conformance remains unknown. Chromium PDF extraction loses some Arabic mappings and trailing wrap spaces; affected PDF content checks fail. SVG/PNG positive complex-script evidence does not assert PDF exact-content conformance. Local macOS evidence does not certify remote Linux sandbox or rendering correctness.
 
