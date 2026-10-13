@@ -20,7 +20,7 @@ test("includes every compiled file exactly once when future tests are added", as
 		"standalone",
 	);
 	assert.equal(selectGroup(plan, "cli").length, 1);
-	assert.equal(selectGroup(plan, "private").length, 3);
+	assert.equal(selectGroup(plan, "private").length, 2);
 	assert.ok(Object.isFrozen(plan.files) && plan.files.every(Object.isFrozen));
 });
 
