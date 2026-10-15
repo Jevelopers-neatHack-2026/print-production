@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { classify, productionFailure } from "./canonical-error.js";
-import { validatePrimitive } from "@jevelopers/shared-contracts";
+import { canonicalJson, validatePrimitive } from "@jevelopers/shared-contracts";
 import type {
 	ContractMap,
 	ContractName,
@@ -92,8 +92,28 @@ export class CandidateRuntime {
 		const { context: ctx, operation, request } = invocation;
 		let entered = false;
 		let activeKey: string | undefined;
+		let correlationId = checked(
+			validatePrimitive("CorrelationId", randomUUID()),
+		);
 		try {
 			requireCandidate(ctx === this.context, "FORBIDDEN", "access");
+			// An invalid request may have accessors or a revoked proxy. Error reporting
+			// must never read it again after validation fails.
+			try {
+				const descriptor = Object.getOwnPropertyDescriptor(
+					request,
+					"correlation_id",
+				);
+				if (descriptor && "value" in descriptor) {
+					const correlation = validatePrimitive(
+						"CorrelationId",
+						descriptor.value,
+					);
+					if (correlation.ok) correlationId = correlation.value;
+				}
+			} catch {
+				// Keep a producer-issued correlation when the input cannot be inspected.
+			}
 			this.now();
 			checked(
 				checkProductionValueIntegrity(
@@ -102,13 +122,18 @@ export class CandidateRuntime {
 					this.context.scope,
 				),
 			);
-			contract(productionRequests[operation], request);
+			const snapshot = contract(
+				productionRequests[operation],
+				JSON.parse(
+					canonicalJson(contract(productionRequests[operation], request)),
+				),
+			);
 			const parsed = checked(
 				checkProductionHostRequest(
 					operation,
-					request,
+					snapshot,
 					this.context,
-					this.state.expectations(request),
+					this.state.expectations(snapshot),
 				),
 			);
 			requireCandidate(
@@ -139,13 +164,6 @@ export class CandidateRuntime {
 			return { ok: true, value: await work(parsed) };
 		} catch (error) {
 			const failure = classify(error);
-			const correlation = validatePrimitive(
-				"CorrelationId",
-				request?.correlation_id,
-			);
-			const correlationId = correlation.ok
-				? correlation.value
-				: checked(validatePrimitive("CorrelationId", randomUUID()));
 			return {
 				ok: false,
 				error: productionFailure(this, {
