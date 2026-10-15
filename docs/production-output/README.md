@@ -1,11 +1,20 @@
 # Private local production output
 
+The current named `exporters` command can report scoped local conformance after
+real output and supplied canonical-manifest byte checks. See the
+[exporter conformance runbook](EXPORTER-CONFORMANCE.md) for execution, custody,
+the retained 0.9.7 byte-metadata defect and release/approval holds. The historical
+private-stage description below does not grant supplier or consumer acceptance.
+
 Issues 13/14/15/16/19 now have executable local functions. They consume the real
 private composition, assets, typography, preflight, repair, SQLite storage,
 durable jobs and observation modules. These modules are not public canonical
 operations. The package root still exports runtime only. No local inventory is
 a canonical ProductionBundle, and no private publication is handoff eligible.
-The executable shared-contracts candidate is unaccepted; see
+The separate `./candidate` entry point wraps these engines with six executable
+development operations, including canonical bundle byte assembly and verification;
+supplier eligibility remains blocked. The shared-contracts candidate is unaccepted;
+see [candidate adapters](../contracts/candidate-adapter.md),
 [candidate intake](../contracts/candidate-intake.md) and
 [combined runner diagnosis](RUNNER-DIAGNOSIS.md) for current owner holds.
 
@@ -138,8 +147,9 @@ are exact pins in the npm-generated lock. Real fixture specs and permission port
 are synthetic; external contracts, creative/event authority, supplier roster,
 app, finance and fulfillment revisions remain null.
 
-```
+```sh
 npm ci
+npm run browser:install
 npm run build
 npm run typecheck
 npm run format:check
@@ -154,7 +164,17 @@ clear inherited NODE_TEST_* variables and include the composition review fixes.
 Passing private leaves retain external-blocked outer receipts. Nested test-context
 regressions deliberately fail canaries and reject inherited success receipts.
 
-Frozen prerequisite merges are `4f11723f59b44da574738e3e45a14043aad23fe9` and
+### Historical integration and review record
+
+The following paragraph preserves the earlier integration candidate's review
+cutoff. ROOT-R1 was subsequently resolved by reviewed/merged PR20, and PR34 made
+the pinned Linux CI profile authoritative; see the
+[current runtime evidence summary](../runtime/README.md#evidence-and-remaining-acceptance)
+and [platform decision](../runtime/README.md#authoritative-evidence-and-the-local-macos-profile).
+Those later decisions do not convert historical failures or current external
+acceptance holds into passes.
+
+Frozen prerequisite merges were `4f11723f59b44da574738e3e45a14043aad23fe9` and
 `0282c2d4ad31691b2bf4e8cb91e87619983a7204`. The continuation also integrates frozen
 durability `b5b96e04951561d44d1b8360d1a5f59d7ed63ce8` and runtime
 `f413ef020629cb264eaf71a5a1df1e150fdc4b12` normally, preserving authorship.

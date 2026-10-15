@@ -42,7 +42,11 @@ function cli(args: readonly string[]) {
 test("fails every unimplemented suite when its registered CLI name is requested", async () => {
 	// Given all pending mandatory leaves. When each CLI runs. Then none reports success.
 	for (const suite of suiteNames.filter(
-		(item) => item !== "runtime" && item !== "release",
+		(item) =>
+			item !== "runtime" &&
+			item !== "artifact-storage" &&
+			item !== "exporters" &&
+			item !== "release",
 	)) {
 		const directory = join(temporary, suite);
 		const result = cli([
@@ -82,13 +86,37 @@ test("aggregates real runtime evidence and pending leaves when release is reques
 	assert.ok(
 		evidence.results
 			.slice(1)
+			.filter(
+				(entry: { suite: string }) =>
+					!["artifact-storage", "exporters"].includes(entry.suite),
+			)
 			.every((entry: { status: string }) => entry.status === "failed"),
 	);
+	const storage = evidence.results.find(
+		(entry: { suite: string }) => entry.suite === "artifact-storage",
+	);
+	assert.equal(storage.status, "passed");
+	assert.equal(storage.result.mode, "local-storage-adapter-conformance");
+	assert.equal(storage.result.accepted, false);
+	assert.equal(storage.result.live_integration, false);
+	assert.equal(storage.result.handoff_eligibility, "unproven");
+	const exporter = evidence.results.find(
+		(entry: { suite: string }) => entry.suite === "exporters",
+	);
+	assert.equal(exporter.status, "passed");
+	assert.equal(exporter.result.mode, "local-exporter-adapter-conformance");
+	assert.equal(exporter.result.accepted, false);
+	assert.equal(exporter.result.live_integration, false);
+	assert.equal(exporter.result.handoff_eligibility, "unproven");
 	for (const suite of suiteNames)
 		await assertPrivateExecution(suite, directory);
 	assert.ok(
 		evidence.results
 			.slice(1)
+			.filter(
+				(entry: { suite: string }) =>
+					!["artifact-storage", "exporters"].includes(entry.suite),
+			)
 			.every(
 				(entry: { failure: { code: string } }) =>
 					entry.failure.code === "SUITE_UNIMPLEMENTED",

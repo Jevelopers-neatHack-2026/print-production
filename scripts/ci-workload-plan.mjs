@@ -8,7 +8,7 @@ export const groups = Object.freeze(["cli", "private", "standalone"]);
 const isolated = new Map([
 	["dist/tests/integration/production-output-cli.test.js", "cli"],
 	["dist/tests/unit/production-output-dispatcher.test.js", "private"],
-	["dist/tests/unit/durability-dispatcher.test.js", "private"],
+	["dist/tests/unit/exporter-conformance-controls.test.js", "private"],
 	["dist/tests/unit/durability-independent-tests.test.js", "private"],
 ]);
 export const digest = (value) =>
