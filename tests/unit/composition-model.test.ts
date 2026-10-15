@@ -18,6 +18,10 @@ import {
 	compareTemplateCompatibility,
 	launchRoster,
 	resolveLayout,
+	resolveSandboxValidationTemplate,
+	sandboxValidationTemplate,
+	sandboxValidationTemplateHash,
+	stubFitsSandboxValidation,
 } from "../../src/templates/private-layout.js";
 import {
 	formatField,
@@ -179,6 +183,91 @@ test("blocks compatibility when mandatory supplier inputs are unknown", () => {
 	assert.equal(compareTemplateCompatibility(l, l, null).state, "unknown");
 	assert.ok(launchRoster.every((row) => row.state === "pending"));
 });
+test("records the Prodigi sandbox validation template: GLOBAL-PHO-4X6, 6x4 in landscape at 300 dpi, 1800x1200 sRGB JPG", () => {
+	const t = sandboxValidationTemplate;
+	assert.equal(t.purpose, "sandbox-validation");
+	assert.equal(t.customerFacing, false);
+	assert.equal(t.supplier, "prodigi");
+	assert.equal(t.sku, "GLOBAL-PHO-4X6");
+	assert.equal(t.printArea, "default");
+	assert.equal(t.orientation, "landscape");
+	assert.deepEqual(
+		[
+			t.widthIn,
+			t.heightIn,
+			t.widthMm,
+			t.heightMm,
+			t.widthPx,
+			t.heightPx,
+			t.dpi,
+		],
+		[6, 4, 152.4, 101.6, 1800, 1200, 300],
+	);
+	assert.deepEqual(
+		[t.profile, t.format, t.sizing, t.fullBleed, t.finish],
+		["srgb", "jpg", "fillPrintArea", true, "lustre"],
+	);
+	assert.equal(t.finishBasis, "published-family-only");
+	assert.deepEqual([t.bleed, t.safe], ["unknown", "unknown"]);
+	assert.deepEqual(
+		[t.destinationCountry, t.shippingMethod],
+		["US", "Standard"],
+	);
+	assert.equal(t.customerMapping, "open-product-decision");
+	assert.match(t.decisionRef, /0003-owner-delegated-decisions-2026-10-12/);
+	assert.ok(Object.isFrozen(t));
+	assert.equal(sandboxValidationTemplateHash, fingerprint(t));
+});
+test("the 1650x600 stub artwork fits on the sandbox validation sheet; oversize or rotated-oversize art does not", () => {
+	assert.ok(stubFitsSandboxValidation({ widthPx: 1650, heightPx: 600 }));
+	assert.ok(stubFitsSandboxValidation({ widthPx: 1800, heightPx: 1200 }));
+	assert.equal(
+		stubFitsSandboxValidation({ widthPx: 1801, heightPx: 600 }),
+		false,
+	);
+	assert.equal(
+		stubFitsSandboxValidation({ widthPx: 600, heightPx: 1650 }),
+		false,
+	);
+	assert.equal(stubFitsSandboxValidation({ widthPx: 0, heightPx: 600 }), false);
+	assert.equal(
+		stubFitsSandboxValidation({ widthPx: 1650.5, heightPx: 600 }),
+		false,
+	);
+});
+test("the sandbox validation template is not a launch format and leaves the customer mapping open", () => {
+	assert.ok(launchRoster.every((row) => row.state === "pending"));
+	assert.ok(
+		!launchRoster.some(
+			(row) => (row.product as string) === sandboxValidationTemplate.id,
+		),
+	);
+	const ticket = launchRoster.find(
+		(row) => row.product === "commemorative-ticket",
+	);
+	assert.match(ticket?.reason ?? "", /customer print-tier mapping/);
+	assert.match(ticket?.reason ?? "", /open product decision/);
+});
+for (const patch of [
+	{ widthPx: 1650 },
+	{ heightMm: 100 },
+	{ orientation: "portrait" },
+	{ customerFacing: true },
+	{ purpose: "launch" },
+	{ profile: "cmyk" },
+	{ bleed: { x: 0, y: 0, width: 1, height: 1 } },
+	{ customerMapping: "decided" },
+	{ extra: 1 },
+])
+	test(`rejects an invalid sandbox validation template ${JSON.stringify(patch)}`, () =>
+		assert.throws(
+			() =>
+				resolveSandboxValidationTemplate({
+					...sandboxValidationTemplate,
+					...patch,
+				}),
+			CompositionError,
+		));
 test("compares dimensions, product, DPI, font, profile and exports against injected constraints", async () => {
 	const f = await fixtureArtifact();
 	assert.equal(
