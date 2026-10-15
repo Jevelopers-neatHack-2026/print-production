@@ -1,10 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { createDecipheriv, createHmac } from "node:crypto";
+import { rmSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { promisify } from "node:util";
 import {
 	DurabilityError,
+	DurabilityDatabase,
+	defaultLimits,
 	hash,
 	scopeKey,
 } from "../../src/internal/durability.js";
+import { ObservationOutbox } from "../../src/telemetry/observations.js";
 import {
 	canonicalJson,
 	evidencePayloadDigest,
@@ -24,11 +32,11 @@ import {
 
 const invalid = (error: unknown) =>
 	error instanceof DurabilityError && error.code === "INVALID_INPUT";
-function seedJob(f: ReturnType<typeof fixture>, key = "batch") {
-	f.jobs.create(scope, plan(key, 2));
-	const claim = f.jobs.claim(scope);
+function seedJob(f: ReturnType<typeof fixture>, key = "batch", owner = scope) {
+	f.jobs.create(owner, plan(key, 2));
+	const claim = f.jobs.claim(owner);
 	assert.ok(claim);
-	f.jobs.complete(scope, claim, [file()]);
+	f.jobs.complete(owner, claim, [file()]);
 }
 function outboxState(f: ReturnType<typeof fixture>) {
 	return {
@@ -42,7 +50,7 @@ test("envelope states staged, unmapped, non-authoritative provenance with a veri
 	seedJob(f);
 	const page = readEvidencePage(f.outbox, scope);
 	assert.equal(page.schema, evidencePageSchemaId);
-	assert.equal(page.version, 1);
+	assert.equal(page.version, 2);
 	assert.deepEqual(
 		{ ...page.provenance, note: undefined },
 		{
@@ -56,7 +64,8 @@ test("envelope states staged, unmapped, non-authoritative provenance with a veri
 	);
 	assert.equal("delivered" in page.provenance, false);
 	assert.match(page.provenance.note, /no delivery claim/);
-	assert.equal(page.scopeDigest, scopeKey(scope));
+	assert.equal(Object.hasOwn(page, "scopeDigest"), false);
+	assert.equal(Object.hasOwn(page, "after"), false);
 	assert.equal(page.integrity.algorithm, "sha256");
 	const { integrity, ...payload } = page;
 	assert.equal(integrity.payloadDigest, hash(canonicalJson(payload)));
@@ -131,10 +140,11 @@ test("preserves unknown measurements and never substitutes zero", () => {
 	}
 });
 
-test("paginates without skipping or duplicating and binds cursors to scope", () => {
+test("paginates without skipping or duplicating and binds opaque cursors to scope", () => {
 	using f = fixture();
 	seedJob(f, "one");
 	seedJob(f, "two");
+	seedJob(f, "foreign", foreign);
 	const all = f.outbox.list(scope).map((e) => e.id);
 	assert.ok(all.length > 3);
 	const seen: string[] = [];
@@ -152,11 +162,20 @@ test("paginates without skipping or duplicating and binds cursors to scope", () 
 	assert.equal(pages, Math.ceil(all.length / 3));
 	const first = readEvidencePage(f.outbox, scope, { limit: 3 });
 	assert.ok(first.nextCursor);
+	assert.match(first.nextCursor, /^v2:[A-Za-z0-9_-]{96}$/);
+	assert.equal(first.nextCursor.includes(scopeKey(scope)), false);
 	assert.throws(
 		() => readEvidencePage(f.outbox, foreign, { cursor: first.nextCursor }),
 		invalid,
 	);
-	for (const bad of ["", "7", "v1:x:1", `v1:${scopeKey(scope)}:-1`])
+	for (const bad of [
+		"",
+		"7",
+		"v1:x:1",
+		`v1:${scopeKey(scope)}:1`,
+		"v2:x",
+		`${first.nextCursor.slice(0, 5)}${first.nextCursor[5] === "A" ? "B" : "A"}${first.nextCursor.slice(6)}`,
+	])
 		assert.throws(
 			() => readEvidencePage(f.outbox, scope, { cursor: bad }),
 			invalid,
@@ -165,18 +184,108 @@ test("paginates without skipping or duplicating and binds cursors to scope", () 
 		() => readEvidencePage(f.outbox, scope, { limit: 0 }),
 		(e) => e instanceof DurabilityError && e.code === "LIMIT",
 	);
-	const empty = readEvidencePage(f.outbox, foreign);
-	assert.deepEqual(empty.observations, []);
-	assert.equal(empty.nextCursor, null);
+	// Mutating any nonce, ciphertext or tag byte must fail authentication.
+	const token = Buffer.from(first.nextCursor.slice(3), "base64url");
+	assert.equal(token.length, 72);
+	assert.equal(token.toString("base64url"), first.nextCursor.slice(3));
+	for (let i = 0; i < token.length; i++) {
+		const tampered = Buffer.from(token);
+		tampered[i] = (tampered[i] ?? 0) ^ 1;
+		assert.throws(
+			() =>
+				readEvidencePage(f.outbox, scope, {
+					cursor: `v2:${tampered.toString("base64url")}`,
+				}),
+			invalid,
+		);
+	}
+	for (const bad of [
+		`${first.nextCursor}=`,
+		`${first.nextCursor}\n`,
+		first.nextCursor.slice(0, -1),
+		`${first.nextCursor}A`,
+		`v2:${token.toString("hex")}`,
+		`v2:${"A".repeat(96)}`,
+		new String(first.nextCursor) as never,
+	])
+		assert.throws(
+			() => readEvidencePage(f.outbox, scope, { cursor: bad }),
+			invalid,
+		);
+	// The same cap applies on first and resumed pages, including the default.
+	using capped = fixture({ ...defaultLimits, pageSize: 2 });
+	seedJob(capped);
+	const cappedFirst = readEvidencePage(capped.outbox, scope);
+	assert.equal(cappedFirst.limit, null);
+	assert.equal(cappedFirst.observations.length, 2);
+	assert.ok(cappedFirst.nextCursor);
+	for (const limit of [
+		0,
+		-1,
+		3,
+		1001,
+		Number.MAX_SAFE_INTEGER,
+		1.5,
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+	]) {
+		for (const cursor of [null, cappedFirst.nextCursor]) {
+			assert.throws(
+				() => readEvidencePage(capped.outbox, scope, { cursor, limit }),
+				(e) => e instanceof DurabilityError && e.code === "LIMIT",
+			);
+		}
+	}
+	const boundedIds: string[] = [];
+	let boundedCursor: string | null = null;
+	do {
+		const page = readEvidencePage(capped.outbox, scope, {
+			cursor: boundedCursor,
+		});
+		assert.ok(page.observations.length <= 2);
+		boundedIds.push(...page.observations.map((o) => o.observationId));
+		boundedCursor = page.nextCursor;
+	} while (boundedCursor !== null);
+	const storedIds = capped.db.sql
+		.prepare("SELECT id FROM observations ORDER BY sequence")
+		.all()
+		.map((row) => row["id"]);
+	assert.deepEqual(boundedIds, storedIds);
+	using empty = fixture();
+	assert.deepEqual(readEvidencePage(empty.outbox, scope).observations, []);
+	assert.equal(readEvidencePage(empty.outbox, scope).nextCursor, null);
+	const foreignPage = readEvidencePage(f.outbox, foreign);
+	assert.deepEqual(
+		foreignPage.observations.map((o) => o.observationId),
+		f.outbox.list(foreign).map((e) => e.id),
+	);
+	assert.equal(foreignPage.nextCursor, null);
 });
 
 test("isolates scopes", () => {
 	using f = fixture();
-	seedJob(f);
+	seedJob(f, "mine", scope);
+	seedJob(f, "theirs", foreign);
 	const mine = readEvidencePage(f.outbox, scope);
 	const theirs = readEvidencePage(f.outbox, foreign);
-	assert.equal(theirs.observations.length, 0);
-	assert.notEqual(theirs.scopeDigest, mine.scopeDigest);
+	assert.deepEqual(
+		mine.observations.map((o) => o.observationId),
+		f.outbox.list(scope).map((e) => e.id),
+	);
+	assert.deepEqual(
+		theirs.observations.map((o) => o.observationId),
+		f.outbox.list(foreign).map((e) => e.id),
+	);
+	assert.ok(
+		mine.observations.every(
+			(o) =>
+				!theirs.observations.some(
+					(other) => other.observationId === o.observationId,
+				),
+		),
+	);
+	assert.equal(Object.hasOwn(mine, "scopeDigest"), false);
+	assert.equal(Object.hasOwn(theirs, "scopeDigest"), false);
 	assert.ok(mine.observations.every((o) => o.observationId));
 });
 
@@ -209,6 +318,7 @@ test("exports no raw input, names, scope strings, URLs or secrets", () => {
 		"SYNTHETIC_PRIVATE_NAME",
 		scope.tenant,
 		scope.project,
+		scopeKey(scope),
 		"https://",
 		"secret",
 		"output.bin",
@@ -230,7 +340,6 @@ test("exports no raw input, names, scope strings, URLs or secrets", () => {
 			"producerBuildDigest",
 			"publicationId",
 			"recordedAtMs",
-			"sequence",
 			"stagingVersion",
 		],
 	);
@@ -319,7 +428,10 @@ test("verification returns false without throwing for malformed or mutated pages
 		verifyEvidencePage({ ...page, nextCursor: undefined as never }),
 		false,
 	);
-	assert.equal(verifyEvidencePage({ ...page, after: Number.NaN }), false);
+	assert.equal(
+		verifyEvidencePage({ ...page, after: Number.NaN } as never),
+		false,
+	);
 	const cyclic = { ...page, observations: [] as unknown[] };
 	cyclic.observations.push(cyclic);
 	assert.equal(verifyEvidencePage(cyclic as never), false);
@@ -348,11 +460,7 @@ test("verification never invokes getters at the root or nested levels", () => {
 			return value;
 		},
 	});
-	const rootAfter = Object.defineProperty(
-		{ ...page },
-		"after",
-		getter(page.after),
-	);
+	const rootAfter = Object.defineProperty({ ...page }, "after", getter(0));
 	const integrityGetter = Object.defineProperty(
 		{ ...page },
 		"integrity",
@@ -369,11 +477,7 @@ test("verification never invokes getters at the root or nested levels", () => {
 	const nestedObservation = {
 		...page,
 		observations: [
-			Object.defineProperty(
-				{ ...page.observations[0] },
-				"sequence",
-				getter(page.observations[0]?.sequence),
-			),
+			Object.defineProperty({ ...page.observations[0] }, "sequence", getter(0)),
 			...page.observations.slice(1),
 		],
 	};
@@ -453,7 +557,7 @@ test("verification rejects forged fixed fields and key sets even with a recomput
 	const forgeries: Record<string, unknown>[] = [
 		{ ...payload, extra: 1 },
 		{ ...payload, schema: "other" },
-		{ ...payload, version: 2 },
+		{ ...payload, version: 1 },
 		{ ...payload, provenance: { ...payload.provenance, authoritative: true } },
 		{ ...payload, provenance: { ...payload.provenance, mapped: true } },
 		{
@@ -470,6 +574,7 @@ test("verification rejects forged fixed fields and key sets even with a recomput
 		{ ...payload, limit: 0 },
 		{ ...payload, nextCursor: "v1:nothex:1" },
 		{ ...payload, nextCursor: `v1:${"0".repeat(64)}:1` },
+		{ ...payload, nextCursor: "v2:x" },
 		{ ...payload, observations: [{ ...first, environment: "production" }] },
 		{ ...payload, observations: [{ ...first, billingMode: "billable" }] },
 		{
@@ -516,5 +621,230 @@ test("verification rejects forged fixed fields and key sets even with a recomput
 			integrity: { ...page.integrity, algorithm: "md5" },
 		} as never),
 		false,
+	);
+});
+
+test("v2 rejects v1 pages and persists immutable opaque cursor keys across migration and concurrent reopen", async () => {
+	using f = fixture();
+	seedJob(f);
+	const first = readEvidencePage(f.outbox, scope, { limit: 1 });
+	assert.ok(first.nextCursor);
+	const smallOffset = f.outbox.createEvidenceCursor(scope, 1);
+	const largeOffset = f.outbox.createEvidenceCursor(scope, 9_999_999_999);
+	assert.equal(smallOffset.length, largeOffset.length);
+	assert.notEqual(smallOffset, largeOffset);
+	assert.equal(smallOffset, f.outbox.createEvidenceCursor(scope, 1));
+	assert.notEqual(smallOffset, f.outbox.createEvidenceCursor(foreign, 1));
+	for (const sequence of [
+		-1,
+		0.5,
+		Number.NaN,
+		Number.POSITIVE_INFINITY,
+		Number.MAX_SAFE_INTEGER + 1,
+	])
+		assert.throws(
+			() => f.outbox.createEvidenceCursor(scope, sequence),
+			invalid,
+		);
+	assert.equal(
+		f.outbox.evidenceCursorOffset(
+			scope,
+			f.outbox.createEvidenceCursor(scope, Number.MAX_SAFE_INTEGER),
+		),
+		Number.MAX_SAFE_INTEGER,
+	);
+	// A synthetic store owner can inspect the AEAD wire format. This key never
+	// leaves the fixture; token holders cannot recover the scope or offset.
+	const key = Buffer.from(
+		f.db.sql.prepare("SELECT key FROM evidence_cursor_keys WHERE id=1").get()?.[
+			"key"
+		] as Uint8Array,
+	);
+	assert.equal(key.length, 32);
+	const encryptionKey = createHmac("sha256", key)
+		.update("pp-evidence-cursor-encryption-v2", "ascii")
+		.digest();
+	const nonceKey = createHmac("sha256", key)
+		.update("pp-evidence-cursor-nonce-v2", "ascii")
+		.digest();
+	assert.notDeepEqual(encryptionKey, nonceKey);
+	assert.notDeepEqual(encryptionKey, key);
+	const wire = Buffer.from(smallOffset.slice(3), "base64url");
+	const decrypt = (aad: string) => {
+		const decipher = createDecipheriv(
+			"aes-256-gcm",
+			encryptionKey,
+			wire.subarray(0, 16),
+		);
+		decipher.setAAD(Buffer.from(aad, "ascii"));
+		decipher.setAuthTag(wire.subarray(56));
+		return Buffer.concat([
+			decipher.update(wire.subarray(16, 56)),
+			decipher.final(),
+		]);
+	};
+	const plaintext = decrypt("pp.telemetry.evidence-cursor.v2");
+	assert.equal(plaintext.length, 40);
+	assert.equal(plaintext.subarray(0, 32).toString("hex"), scopeKey(scope));
+	assert.equal(plaintext.readBigUInt64BE(32), 1n);
+	assert.throws(() => decrypt("pp.telemetry.evidence-cursor.v1"));
+	const nonceSet = new Set<string>();
+	for (let sequence = 0; sequence < 256; sequence++)
+		nonceSet.add(
+			Buffer.from(
+				f.outbox.createEvidenceCursor(scope, sequence).slice(3),
+				"base64url",
+			)
+				.subarray(0, 16)
+				.toString("hex"),
+		);
+	assert.equal(nonceSet.size, 256);
+	for (const sql of [
+		"UPDATE evidence_cursor_keys SET key=? WHERE id=1",
+		"INSERT OR REPLACE INTO evidence_cursor_keys(id,key) VALUES(1,?)",
+		"REPLACE INTO evidence_cursor_keys(id,key) VALUES(1,?)",
+		"INSERT INTO evidence_cursor_keys(id,key) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET key=excluded.key",
+	])
+		assert.throws(() => f.db.sql.prepare(sql).run(Buffer.alloc(32, 42)));
+	assert.throws(() => f.db.sql.exec("DELETE FROM evidence_cursor_keys"));
+	assert.deepEqual(
+		Buffer.from(
+			f.db.sql
+				.prepare("SELECT key FROM evidence_cursor_keys WHERE id=1")
+				.get()?.["key"] as Uint8Array,
+		),
+		key,
+	);
+	assert.equal(statSync(f.path).mode & 0o077, 0);
+	const { integrity: _integrity, ...payload } = first;
+	const legacyPayload = {
+		...payload,
+		version: 1,
+		scopeDigest: scopeKey(scope),
+		after: 0,
+		nextCursor: `v1:${scopeKey(scope)}:1`,
+		observations: first.observations.map((observation, index) => ({
+			...observation,
+			sequence: f.outbox.list(scope)[index]?.sequence ?? 0,
+		})),
+	};
+	const legacy = {
+		...legacyPayload,
+		integrity: {
+			algorithm: "sha256" as const,
+			canonicalization: "json-sorted-keys-v1" as const,
+			payloadDigest: evidencePayloadDigest(legacyPayload as never),
+		},
+	};
+	assert.equal(verifyEvidencePage(legacy as never), false);
+	assert.throws(
+		() => readEvidencePage(f.outbox, scope, { cursor: legacy.nextCursor }),
+		invalid,
+	);
+
+	const reopened = new DurabilityDatabase(f.path);
+	try {
+		const outbox = new ObservationOutbox(reopened);
+		const resumed = readEvidencePage(outbox, scope, {
+			cursor: first.nextCursor,
+			limit: 1,
+		});
+		assert.equal(verifyEvidencePage(resumed), true);
+		assert.notEqual(
+			resumed.observations[0]?.observationId,
+			first.observations[0]?.observationId,
+		);
+	} finally {
+		reopened.close();
+	}
+
+	// Reopen a closed old-schema store with real staged observations. Dropping
+	// only this additive table recreates the exact pre-cursor schema.
+	const legacyStore = fixture();
+	let legacyOpen = true;
+	try {
+		seedJob(legacyStore, "legacy");
+		const history = legacyStore.outbox.list(scope);
+		const settings = legacyStore.db.sql.prepare("SELECT * FROM settings").all();
+		legacyStore.db.sql.exec("DROP TABLE evidence_cursor_keys");
+		legacyStore.db.close();
+		legacyOpen = false;
+		let migratedPage: EvidencePage;
+		{
+			using migrated = new DurabilityDatabase(legacyStore.path);
+			const migratedOutbox = new ObservationOutbox(migrated);
+			assert.deepEqual(migratedOutbox.list(scope), history);
+			assert.deepEqual(
+				migrated.sql.prepare("SELECT * FROM settings").all(),
+				settings,
+			);
+			migratedPage = readEvidencePage(migratedOutbox, scope, { limit: 1 });
+			assert.ok(migratedPage.nextCursor);
+		}
+		using reopenedMigration = new DurabilityDatabase(legacyStore.path);
+		const reopenedOutbox = new ObservationOutbox(reopenedMigration);
+		assert.deepEqual(
+			readEvidencePage(reopenedOutbox, scope, { limit: 1 }),
+			migratedPage,
+		);
+		assert.ok(
+			readEvidencePage(reopenedOutbox, scope, {
+				cursor: migratedPage.nextCursor,
+			}).observations.length > 0,
+		);
+	} finally {
+		if (legacyOpen) legacyStore.db.close();
+		rmSync(legacyStore.root, { recursive: true, force: true });
+	}
+	// The SQLite schema/WAL must already exist. Cold database creation has a
+	// separate bootstrap race; here two first outboxes race to persist one key.
+	const concurrentPath = join(f.root, "concurrent.sqlite");
+	{
+		using schemaOnly = new DurabilityDatabase(concurrentPath);
+		assert.equal(
+			schemaOnly.sql
+				.prepare("SELECT COUNT(*) AS n FROM evidence_cursor_keys")
+				.get()?.["n"],
+			0,
+		);
+	}
+	const script = `
+		import { DurabilityDatabase } from ${JSON.stringify(new URL("../../src/internal/durability.js", import.meta.url).href)};
+		import { ObservationOutbox } from ${JSON.stringify(new URL("../../src/telemetry/observations.js", import.meta.url).href)};
+		using db = new DurabilityDatabase(${JSON.stringify(concurrentPath)});
+		const outbox = new ObservationOutbox(db);
+		console.log(outbox.createEvidenceCursor(${JSON.stringify(scope)}, 7));
+	`;
+	const run = promisify(execFile);
+	const processes = await Promise.all(
+		[1, 2].map(() =>
+			run(process.execPath, ["--input-type=module", "-e", script], {
+				timeout: 30000,
+			}),
+		),
+	);
+	assert.equal(processes[0]?.stdout, processes[1]?.stdout);
+	using concurrent = new DurabilityDatabase(concurrentPath);
+	assert.equal(
+		concurrent.sql
+			.prepare("SELECT COUNT(*) AS n FROM evidence_cursor_keys")
+			.get()?.["n"],
+		1,
+	);
+	assert.equal(
+		new ObservationOutbox(concurrent).evidenceCursorOffset(
+			scope,
+			processes[0]?.stdout.trim() ?? null,
+		),
+		7,
+	);
+	using otherStore = fixture();
+	seedJob(otherStore, "other-store");
+	assert.throws(
+		() =>
+			readEvidencePage(otherStore.outbox, scope, {
+				cursor: first.nextCursor,
+			}),
+		invalid,
 	);
 });
