@@ -16,7 +16,7 @@ import {
 } from "./observations.js";
 
 export const evidencePageSchemaId = "pp.telemetry.staged-observation-page";
-export const evidencePageVersion = 1;
+export const evidencePageVersion = 2;
 
 type Measurement<U extends string> = {
 	readonly unit: U;
@@ -24,7 +24,6 @@ type Measurement<U extends string> = {
 	readonly completeness: "measured" | "unknown";
 };
 export type EvidenceObservation = {
-	readonly sequence: number;
 	readonly observationId: string;
 	readonly operationId: string;
 	readonly executionAttemptId: string | null;
@@ -54,13 +53,6 @@ export type EvidencePagePayload = {
 		readonly deliveryStatus: "not_included";
 		readonly note: string;
 	};
-	/**
-	 * Opaque routing hash of the caller scope. No raw tenant/project is exported,
-	 * but it is an ordinary unkeyed SHA-256 that can be guessed: it provides
-	 * neither anonymization nor authentication.
-	 */
-	readonly scopeDigest: string;
-	readonly after: number;
 	/** Caller-requested page size; null when the outbox default was used. */
 	readonly limit: number | null;
 	readonly nextCursor: string | null;
@@ -76,7 +68,7 @@ export type EvidencePage = EvidencePagePayload & {
 
 const note =
 	"Local staged, unmapped, non-authoritative observations. Delivery status is not included and no delivery claim is made. Not a UsageEvent, ledger, approved receipt or consumer acknowledgement.";
-const cursorPattern = /^v1:([a-f0-9]{64}):(0|[1-9][0-9]{0,15})$/;
+const cursorPattern = /^v2:[A-Za-z0-9_-]{96}$/;
 
 const measurementSchema = <U extends string>(unit: U) =>
 	z
@@ -90,7 +82,6 @@ const measurementSchema = <U extends string>(unit: U) =>
 const nullableId = idSchema.nullable();
 const observationShape = z
 	.object({
-		sequence: z.number().int().nonnegative(),
 		observationId: idSchema,
 		operationId: idSchema,
 		executionAttemptId: nullableId,
@@ -126,8 +117,6 @@ const pageShape = z
 				note: z.literal(note),
 			})
 			.strict(),
-		scopeDigest: digestSchema,
-		after: z.number().int().nonnegative(),
 		limit: z.number().int().positive().nullable(),
 		nextCursor: z.string().regex(cursorPattern).nullable(),
 		observations: z.array(observationShape),
@@ -225,9 +214,6 @@ export function verifyEvidencePage(page: EvidencePage): boolean {
 		const shaped = pageShape.safeParse(payload);
 		const commitment = integrityShape.safeParse(integrity);
 		if (!shaped.success || !commitment.success) return false;
-		const cursor = shaped.data.nextCursor;
-		if (cursor !== null && !cursor.startsWith(`v1:${shaped.data.scopeDigest}:`))
-			return false;
 		return (
 			commitment.data.payloadDigest ===
 			evidencePayloadDigest(payload as EvidencePagePayload)
@@ -242,7 +228,6 @@ function measurement<U extends string>(m: Measurement<U>): Measurement<U> {
 }
 function project(event: Observation): EvidenceObservation {
 	return {
-		sequence: event.sequence,
 		observationId: event.id,
 		operationId: event.operation,
 		executionAttemptId: event.attempt,
@@ -262,21 +247,14 @@ function project(event: Observation): EvidenceObservation {
 		},
 	};
 }
-function after(scopeDigest: Digest, cursor: string | null): number {
-	if (cursor === null) return 0;
-	const match = cursorPattern.exec(cursor);
-	check(match !== null && match[1] === scopeDigest, "INVALID_INPUT");
-	const value = Number(match[2]);
-	check(Number.isSafeInteger(value), "INVALID_INPUT");
-	return value;
-}
-
 /**
  * Read-only export adapter over ObservationOutbox.list. It never claims,
  * settles or requeues events and exports no raw tenant/project. Request and
  * row-key digests stay in the private DB: unkeyed hashes would allow
  * dictionary and cross-scope equality disclosure.
- * Callers must authenticate and authorize scope first.
+ * Each read is capped by the outbox's configured page size, and cursors cannot
+ * seek to caller-selected offsets. Callers must authenticate and authorize
+ * scope first and apply any broader request-budget policy.
  */
 export function readEvidencePage(
 	outbox: ObservationOutbox,
@@ -284,7 +262,7 @@ export function readEvidencePage(
 	options: { readonly cursor?: string | null; readonly limit?: number } = {},
 ): EvidencePage {
 	const scopeDigest = scopeKey(scope);
-	const start = after(scopeDigest, options.cursor ?? null);
+	const start = outbox.evidenceCursorOffset(scope, options.cursor ?? null);
 	const events =
 		options.limit !== undefined
 			? outbox.list(scope, start, options.limit)
@@ -293,7 +271,7 @@ export function readEvidencePage(
 		check(event.scope === scopeDigest, "INTEGRITY");
 		return project(event);
 	});
-	const last = observations.at(-1);
+	const last = events.at(-1);
 	const more =
 		last !== undefined && outbox.list(scope, last.sequence, 1).length > 0;
 	const payload: EvidencePagePayload = {
@@ -307,10 +285,9 @@ export function readEvidencePage(
 			deliveryStatus: "not_included",
 			note,
 		},
-		scopeDigest,
-		after: start,
 		limit: options.limit ?? null,
-		nextCursor: more && last ? `v1:${scopeDigest}:${last.sequence}` : null,
+		nextCursor:
+			more && last ? outbox.createEvidenceCursor(scope, last.sequence) : null,
 		observations,
 	};
 	return {

@@ -262,10 +262,16 @@ mapping, real finance intake, Neatlogs and EvaluationEvidence remain blocked.
 staged observations as digest-committed pages (see the telemetry README). It
 adds no provider/billable IDs or valuation, states delivery status as
 `not_included` (no delivery claim), and does not mutate
-outbox state. Its projection is field-by-field (no request or row-key digests; scope is an
-ordinary guessable hash, not anonymization or authentication), the verifier
-enforces a strict envelope shape, and its canonicalization rejects non-JSON or
-malformed data. Its SHA-256 commitment is local tamper evidence only.
+outbox state. Its field-by-field projection omits scope digests and plain
+request/row-key hashes. Version 2 omits global sequence/offset values and
+uses opaque, store-keyed, scope-bound cursors with configured per-read limits.
+The verifier enforces a strict envelope shape, and its canonicalization rejects
+non-JSON or malformed data. Its SHA-256 commitment is local tamper evidence
+only; callers must authorize scope before using the adapter. The private
+cursor-key table is added on database open and initialized by the first outbox
+instance, retaining the key across reopen. Its insert/update/delete guards also
+prevent replacement. The outbox and cursor minting methods are trusted local
+APIs; token validation does not enforce caller authorization.
 
 ## Acceptance and handoffs
 
