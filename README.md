@@ -124,6 +124,22 @@ Local macOS runs pass only on the exact pinned macOS profile; the Linux CI `runt
 lint command. Exact suite definitions are in the
 [registry](src/exporters/private-suite-registry.ts).
 
+Verify retained bundle bytes without rendering or recording an execution attempt:
+
+```sh
+npm run verify:bundle -- --directory /path/to/bundle --commitment /trusted/publication.json --tenant <tenant-uuid> --project <project-uuid>
+```
+
+Supply the `ProductionBundleRef/1.0.0` commitment from an independently authenticated
+publication record, outside the bundle directory, and independently authorized scope.
+The flat directory must contain exactly the shipped payloads, `manifest.json`,
+`archive.zip` and `detached.json`; extra files, subdirectories and symlinks fail.
+The command bounds reads and delegates schema, lineage, inventory, ZIP and hash
+checks to the frozen shared-contracts verifier. It writes one JSON receipt to stdout
+and changes no input or job state. Exit 0 means byte integrity passed; the current
+candidate still reports `eligibility: blocked`, `accepted: false`. A synthetic
+commitment is a diagnostic control, not customer approval or issuer authority.
+
 ## Module map
 
 | Path | State | Details |

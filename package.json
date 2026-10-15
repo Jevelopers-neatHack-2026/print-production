@@ -37,6 +37,7 @@
 		"format:check": "biome format package.json tsconfig.json src scripts tests docs/runtime/pins.json",
 		"test": "node scripts/environment.mjs && node --test --test-concurrency=1 dist/tests/unit/*.test.js dist/tests/contract/*.test.js dist/tests/integration/*.test.js",
 		"verify": "node dist/scripts/verify/cli.js",
+		"verify:bundle": "node scripts/environment.mjs && node dist/scripts/verify/bundle-cli.js",
 		"browser:install": "node scripts/environment.mjs && playwright install chromium"
 	},
 	"dependencies": {
