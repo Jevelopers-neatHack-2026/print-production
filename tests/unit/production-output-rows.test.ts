@@ -10,7 +10,11 @@ import {
 	personalizeInput,
 	resolveRowPolicy,
 } from "../../src/personalization/private-rows.js";
-import { fingerprint } from "../../src/composition/primitives.js";
+import {
+	digest,
+	fingerprint,
+	refSchema,
+} from "../../src/composition/primitives.js";
 import { OutputError } from "../../src/exporters/private-policy.js";
 
 test("preserves exact strings and immutable facts when approved personal fields are bound", async () => {
@@ -74,6 +78,74 @@ test("records missing and undeclared fields before composition", async () => {
 		OutputError,
 	);
 });
+async function prototypeFieldFixture(field: string, required: boolean) {
+	const f = await fixtureArtifact(),
+		input = {
+			...f.artifact.model.input,
+			nodes: f.artifact.model.input.nodes.map((node) =>
+				node.kind === "text" && node.id === "name"
+					? {
+							...node,
+							field: { ...node.field, fieldRef: refSchema.parse(field) },
+						}
+					: node,
+			),
+		},
+		policy = resolveRowPolicy(
+			{
+				...rowPolicy(f.artifact.model.input),
+				fields: [{ field, node: "name", required, maxLength: 200 }],
+			},
+			input,
+		);
+	return { input, policy };
+}
+for (const field of [
+	"toString",
+	"hasOwnProperty",
+	"constructor",
+	"isPrototypeOf",
+	"propertyIsEnumerable",
+	"valueOf",
+	"toLocaleString",
+]) {
+	test(`treats missing required ${field} as absent despite Object.prototype`, async () => {
+		const { input, policy } = await prototypeFieldFixture(field, true),
+			[row] = planRows([{ rowId: "a", fields: {} }], policy);
+		assert.ok(row);
+		assert.deepEqual(row.errors, [
+			{ code: "ROW_SCHEMA", path: `fields.${field}` },
+		]);
+		assert.throws(() => personalizeInput(input, row, policy), OutputError);
+	});
+	test(`uses empty text for missing optional ${field}`, async () => {
+		const { input, policy } = await prototypeFieldFixture(field, false),
+			[row] = planRows([{ rowId: "a", fields: {} }], policy);
+		assert.ok(row);
+		assert.deepEqual(row.errors, []);
+		const result = personalizeInput(input, row, policy),
+			text = result.nodes.find((node) => node.id === "name");
+		assert.ok(text?.kind === "text");
+		assert.equal(text.field.source.value, "");
+		assert.equal(text.field.sourceDigest, digest(""));
+	});
+}
+for (const field of ["toString", "hasOwnProperty"]) {
+	test(`preserves explicit ${field} text exactly`, async () => {
+		const { input, policy } = await prototypeFieldFixture(field, true),
+			[row] = planRows(
+				[{ rowId: "a", fields: { [field]: "Zoë 0007" } }],
+				policy,
+			);
+		assert.ok(row);
+		assert.deepEqual(row.errors, []);
+		const result = personalizeInput(input, row, policy),
+			text = result.nodes.find((node) => node.id === "name");
+		assert.ok(text?.kind === "text");
+		assert.equal(text.field.source.value, "Zoë 0007");
+		assert.equal(text.field.sourceDigest, digest("Zoë 0007"));
+	});
+}
 test("bounds structured bytes and rows when input exceeds policy", async () => {
 	const f = await fixtureArtifact(),
 		policy = rowPolicy(f.artifact.model.input);
