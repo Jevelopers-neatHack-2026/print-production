@@ -134,7 +134,9 @@ export function planRows(
 			if (!policy.fields.some((f) => f.field === name))
 				errors.push({ code: "ROW_SCHEMA", path: `fields.${name}` });
 		for (const field of policy.fields) {
-			const value = fields[field.field];
+			const value = Object.hasOwn(fields, field.field)
+				? fields[field.field]
+				: undefined;
 			if (
 				(field.required && (value === undefined || value.length === 0)) ||
 				(value !== undefined && value.length > field.maxLength)
@@ -162,7 +164,9 @@ export function personalizeInput(
 			if (node.kind !== "text") return node;
 			const mapping = policy.fields.find((f) => f.node === node.id);
 			if (!mapping) return node;
-			const value = planned.row.fields[mapping.field] ?? "";
+			const value = Object.hasOwn(planned.row.fields, mapping.field)
+				? (planned.row.fields[mapping.field] ?? "")
+				: "";
 			return {
 				...node,
 				field: {
